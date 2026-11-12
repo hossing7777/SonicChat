@@ -17,7 +17,6 @@ import android.view.WindowManager
 import android.widget.*
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -45,7 +44,7 @@ class MainActivity : Activity() {
 
     @Volatile private var demodTx: Demodulator? = null
     @Volatile private var demodAck: Demodulator? = null
-    @Volatile private var transmitting = false
+    @Volatile private var playing = false   // فقط هنگام پخش صدا
     @Volatile private var listening = false
     private val pending = StringBuilder()
     private val flushRunnable = Runnable { flushPending(true) }
@@ -58,8 +57,6 @@ class MainActivity : Activity() {
     private lateinit var relTx: ReliableTx
     private val REQ_FILE_NORMAL = 42
     private val REQ_FILE_RELIABLE = 43
-
-    /** صف ACK برای فرستنده */
     private val ackQueue = LinkedBlockingQueue<Pair<Int, Boolean>>()
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -88,14 +85,11 @@ class MainActivity : Activity() {
                 }
                 result
             },
-            onPacket = { cur, total, tries ->
-                ui.post { tvProgress.text = "پکت $cur/$total — تلاش $tries" }
-            },
+            onPacket = { cur, total, tries -> ui.post { tvProgress.text = "پکت $cur/$total — تلاش $tries" } },
             onDone = { lost ->
                 ui.post {
                     tvStatus.text = "ارسال مطمئن تمام شد"
-                    if (lost.isEmpty()) tvProgress.text = "همه پکت‌ها سالم رسیدند ✔"
-                    else tvProgress.text = "پکت‌های گم‌شده: ${lost.joinToString(",")}"
+                    tvProgress.text = if (lost.isEmpty()) "همه پکت‌ها سالم ✔" else "گم‌شده: ${lost.joinToString(",")}"
                 }
             }
         )
@@ -112,7 +106,7 @@ class MainActivity : Activity() {
         }
         fun lp(w: Int = -1, h: Int = -2, wt: Float = 0f) = LinearLayout.LayoutParams(w, h, wt)
 
-        root.addView(TextView(this).apply { text = "SonicChat — نسخه ۷ (ARQ دو فرکانس)"; textSize = 16f })
+        root.addView(TextView(this).apply { text = "SonicChat — 7.1 (ARQ دو فرکانس)"; textSize = 16f })
         tvStatus = TextView(this).apply { text = "آماده" }
         root.addView(tvStatus)
         pbLevel = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
@@ -126,13 +120,13 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_NUMBER
             setText(prefs.getInt("freq", 2000).toString())
         }
-        row.addView(etFreq, lp(dp(80), -2))
+        row.addView(etFreq, lp(dp(70), -2))
         row.addView(TextView(this).apply { text = " ACK: " })
         etAckFreq = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
             setText(prefs.getInt("ackfreq", 3000).toString())
         }
-        row.addView(etAckFreq, lp(dp(80), -2))
+        row.addView(etAckFreq, lp(dp(70), -2))
         spSpeed = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
                 listOf("کند", "متوسط", "سریع"))
@@ -145,38 +139,35 @@ class MainActivity : Activity() {
         root.addView(cbMax)
 
         etSend = EditText(this).apply {
-            hint = "متن برای ارسال..."
+            hint = "متن..."
             minLines = 2; maxLines = 3
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             gravity = Gravity.TOP
         }
         root.addView(etSend, lp())
 
-        val btns = LinearLayout(this)
-        btns.addView(Button(this).apply { text = "ارسال متن"; setOnClickListener { send() } }, lp(0, -2, 1f))
-        btns.addView(Button(this).apply { text = "فایل عادی"; setOnClickListener { pickFile(REQ_FILE_NORMAL) } }, lp(0, -2, 1f))
-        root.addView(btns, lp())
+        val b1 = LinearLayout(this)
+        b1.addView(Button(this).apply { text = "متن"; setOnClickListener { send() } }, lp(0, -2, 1f))
+        b1.addView(Button(this).apply { text = "فایل عادی"; setOnClickListener { pickFile(REQ_FILE_NORMAL) } }, lp(0, -2, 1f))
+        root.addView(b1, lp())
 
-        val btns2 = LinearLayout(this)
-        btns2.addView(Button(this).apply {
+        val b2 = LinearLayout(this)
+        b2.addView(Button(this).apply {
             text = "فایل مطمئن (ARQ)"
             setOnClickListener { pickFile(REQ_FILE_RELIABLE) }
         }, lp(0, -2, 1f))
-        btns2.addView(Button(this).apply {
+        b2.addView(Button(this).apply {
             text = "اعمال"
-            setOnClickListener { applySettings(); Toast.makeText(context, "اعمال شد", Toast.LENGTH_SHORT).show() }
+            setOnClickListener { applySettings(); Toast.makeText(context, "ok", Toast.LENGTH_SHORT).show() }
         }, lp(0, -2, 1f))
-        root.addView(btns2, lp())
+        root.addView(b2, lp())
 
-        val switches = LinearLayout(this)
+        val sw = LinearLayout(this)
         swRx = Switch(this).apply { text = "دریافت" }
-        switches.addView(swRx, lp(0, -2, 1f))
-        swAck = Switch(this).apply {
-            text = "ACK خودکار"
-            isChecked = prefs.getBoolean("autoack", true)
-        }
-        switches.addView(swAck, lp(0, -2, 1f))
-        root.addView(switches)
+        sw.addView(swRx, lp(0, -2, 1f))
+        swAck = Switch(this).apply { text = "ACK خودکار"; isChecked = prefs.getBoolean("autoack", true) }
+        sw.addView(swAck, lp(0, -2, 1f))
+        root.addView(sw)
 
         root.addView(TextView(this).apply { text = "دریافت‌شده:" })
         tvRx = TextView(this).apply { textSize = 13f; setTextIsSelectable(true); setPadding(dp(6), dp(6), dp(6), dp(6)) }
@@ -200,10 +191,8 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK || data?.data == null) return
-        when (requestCode) {
-            REQ_FILE_NORMAL -> sendFileNormal(data.data!!)
-            REQ_FILE_RELIABLE -> sendFileReliable(data.data!!)
-        }
+        if (requestCode == REQ_FILE_NORMAL) sendFileNormal(data.data!!)
+        if (requestCode == REQ_FILE_RELIABLE) sendFileReliable(data.data!!)
     }
 
     private fun applySettings() {
@@ -211,27 +200,23 @@ class MainActivity : Activity() {
         val ack = (etAckFreq.text.toString().toIntOrNull() ?: 3000).coerceIn(500, 20500)
         val sp = spSpeed.selectedItemPosition.coerceIn(0, 2)
         etFreq.setText(fr.toString()); etAckFreq.setText(ack.toString())
-        prefs.edit()
-            .putInt("freq", fr).putInt("ackfreq", ack).putInt("speed", sp)
-            .putBoolean("autoack", swAck.isChecked)
-            .apply()
-        f0 = fr.toDouble()
-        fAck = ack.toDouble()
+        prefs.edit().putInt("freq", fr).putInt("ackfreq", ack).putInt("speed", sp)
+            .putBoolean("autoack", swAck.isChecked).apply()
+        f0 = fr.toDouble(); fAck = ack.toDouble()
         symN = SR * speedMs[sp] / 1000
         rebuildDemods()
     }
 
     private fun rebuildDemods() {
         demodTx = Demodulator(SR, f0, f0 + Proto.SPACING, symN) { flags, payload ->
-            handleIncoming(flags, payload, fromAckChannel = false)
+            handleIncoming(flags, payload, false)
         }
         demodAck = Demodulator(SR, fAck, fAck + Proto.SPACING, symN) { flags, payload ->
-            handleIncoming(flags, payload, fromAckChannel = true)
+            handleIncoming(flags, payload, true)
         }
     }
 
     private fun handleIncoming(flags: Int, payload: ByteArray, fromAckChannel: Boolean) {
-        // ACK؟
         if (fromAckChannel) {
             if ((flags and 0x0E) == ReliableProto.TYPE_ACK) {
                 val (seq, ok) = ReliableProto.parseAck(payload)
@@ -239,9 +224,7 @@ class MainActivity : Activity() {
             }
             return
         }
-        // روی کانال اصلی
         val type = flags and 0x06
-        // فایل مطمئن؟
         if (ReliableProto.isReliable(flags)) {
             relRx.onFrame(flags, payload,
                 sendAck = { seq, ok ->
@@ -250,27 +233,25 @@ class MainActivity : Activity() {
                 onProgress = { got, total -> ui.post { tvProgress.text = "دریافت مطمئن: $got/$total" } },
                 onDone = { f ->
                     ui.post {
-                        tvProgress.text = "فایل مطمئن ذخیره شد: ${f.name}"
-                        tvRx.append("[${SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())}] 📎 ${f.name} (مطمئن)\n")
+                        tvProgress.text = "ذخیره شد: ${f.name}"
+                        tvRx.append("[${SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())}] 📎 ${f.name} (ARQ)\n")
                     }
                 }
             )
             return
         }
-        // فایل عادی؟
         if (type != 0) {
             fileRx.onFrame(flags, payload,
-                onProgress = { p -> ui.post { tvProgress.text = "دریافت فایل عادی: $p%" } },
+                onProgress = { p -> ui.post { tvProgress.text = "دریافت: $p%" } },
                 onDone = { f ->
                     ui.post {
-                        tvProgress.text = "فایل عادی: ${f.name}"
+                        tvProgress.text = "ذخیره شد: ${f.name}"
                         tvRx.append("[${SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())}] 📎 ${f.name}\n")
                     }
                 }
             )
             return
         }
-        // متن
         val text = String(payload, Charsets.UTF_8)
         ui.post {
             pending.append(text)
@@ -282,66 +263,53 @@ class MainActivity : Activity() {
     private fun flushPending(partial: Boolean) {
         if (pending.isEmpty()) return
         val t = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        tvRx.append("[$t] $pending${if (partial) " …(ناقص)" else ""}\n\n")
+        tvRx.append("[$t] $pending${if (partial) " …" else ""}\n\n")
         pending.setLength(0)
         rxScroll.post { rxScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
-    // ---------------- ارسال متن ----------------
     private fun send() {
         val text = etSend.text.toString().trim()
-        if (text.isEmpty() || transmitting) return
+        if (text.isEmpty() || playing) return
         applySettings()
         val chunks = Proto.split(text)
         val frames = ArrayList<Pair<Int, ByteArray>>()
         chunks.forEachIndexed { i, c ->
-            val more = if (i < chunks.size - 1) 1 else 0
-            frames.add(Pair(more, c))
+            frames.add(Pair(if (i < chunks.size - 1) 1 else 0, c))
         }
-        transmitFramesOneShot(frames, "متن", f0)
+        transmitOneShot(frames, "متن", f0)
     }
 
-    // ---------------- ارسال فایل عادی ----------------
     private fun sendFileNormal(uri: Uri) {
-        if (transmitting) return
+        if (playing) return
         applySettings()
         val prepared = FileTx.prepare(this, uri)
         if (prepared.isEmpty()) { Toast.makeText(this, "فایل خوانده نشد", Toast.LENGTH_SHORT).show(); return }
         val frames = prepared.map { Pair(it.flags, it.data) }
-        transmitFramesOneShot(frames, "فایل عادی", f0)
+        transmitOneShot(frames, "فایل", f0)
     }
 
-    // ---------------- ارسال فایل مطمئن ----------------
     private fun sendFileReliable(uri: Uri) {
-        if (transmitting) return
+        if (playing) return
         applySettings()
-        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: run {
-            Toast.makeText(this, "فایل خوانده نشد", Toast.LENGTH_SHORT).show(); return
-        }
+        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
         val name = queryName(uri) ?: "file.bin"
-        transmitting = true
         ackQueue.clear()
         val am = getSystemService(AUDIO_SERVICE) as AudioManager
         if (cbMax.isChecked) am.setStreamVolume(AudioManager.STREAM_MUSIC, am.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0)
-        tvStatus.text = "ارسال مطمئن..."
+        tvStatus.text = "ARQ..."
         thread(isDaemon = true) {
-            try {
-                relTx.start(name, bytes)
-            } finally {
-                transmitting = false
-                ui.post { tvStatus.text = "ارسال مطمئن پایان" }
-            }
+            relTx.start(name, bytes)
+            ui.post { tvStatus.text = "ARQ پایان" }
         }
     }
 
-    // ---------------- پخش یکجا (مثل نسخه ۶) ----------------
-    private fun transmitFramesOneShot(frames: List<Pair<Int, ByteArray>>, label: String, freq: Double) {
+    private fun transmitOneShot(frames: List<Pair<Int, ByteArray>>, label: String, freq: Double) {
         val a0 = freq; val a1 = freq + Proto.SPACING; val n = symN
         if (cbMax.isChecked) {
             val am = getSystemService(AUDIO_SERVICE) as AudioManager
             am.setStreamVolume(AudioManager.STREAM_MUSIC, am.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0)
         }
-        transmitting = true
         tvStatus.text = "ارسال $label..."
         thread(isDaemon = true) {
             try {
@@ -360,13 +328,12 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 ui.post { Toast.makeText(this, "خطا: ${e.message}", Toast.LENGTH_LONG).show() }
             } finally {
-                transmitting = false
-                ui.post { tvStatus.text = "ارسال $label تمام ✔"; tvProgress.text = ""; etSend.setText("") }
+                ui.post { tvStatus.text = "پایان"; tvProgress.text = ""; etSend.setText("") }
             }
         }
     }
 
-    /** ارسال یک فریم کوچک روی فرکانس مشخص (برای ACK) */
+    /** پخش یک فریم کوچک (ACK یا پکت ARQ) — تا پایان پخش، گوش نمی‌دهیم */
     private fun sendOneFrame(flags: Int, payload: ByteArray, freq: Double) {
         val n = symN
         val pcm = Proto.modulate(Proto.frame(flags, payload), freq, freq + Proto.SPACING, n)
@@ -374,28 +341,32 @@ class MainActivity : Activity() {
     }
 
     private fun playPcm(pcm: ShortArray) {
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(SR)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-            .setBufferSizeInBytes(max(SR, pcm.size * 2))
-            .setTransferMode(AudioTrack.MODE_STREAM).build()
-        track.play()
-        var w = 0
-        while (w < pcm.size) {
-            val k = track.write(pcm, w, pcm.size - w)
-            if (k <= 0) break
-            w += k
+        val old = playing
+        playing = true
+        try {
+            val track = AudioTrack.Builder()
+                .setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                .setAudioFormat(AudioFormat.Builder().setSampleRate(SR)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                .setBufferSizeInBytes(max(SR, pcm.size * 2))
+                .setTransferMode(AudioTrack.MODE_STREAM).build()
+            track.play()
+            var w = 0
+            while (w < pcm.size) {
+                val k = track.write(pcm, w, pcm.size - w)
+                if (k <= 0) break
+                w += k
+            }
+            Thread.sleep(pcm.size * 1000L / SR + 100)
+            track.stop(); track.release()
+        } finally {
+            playing = old
         }
-        // مدت پخش + کمی اضافه
-        Thread.sleep(pcm.size * 1000L / SR + 100)
-        track.stop(); track.release()
     }
 
-    // ---------------- دریافت ----------------
     private fun startListening() {
         if (listening) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -426,7 +397,7 @@ class MainActivity : Activity() {
             while (listening) {
                 val r = rec.read(buf, 0, buf.size)
                 if (r <= 0) continue
-                if (transmitting) continue
+                // هنگام پخش، ACK را مصرف نکن (echo)، ولی همچنان feed کن
                 demodTx?.feed(buf, r)
                 demodAck?.feed(buf, r)
                 val lv = max(demodTx?.level ?: 0.0, demodAck?.level ?: 0.0)
