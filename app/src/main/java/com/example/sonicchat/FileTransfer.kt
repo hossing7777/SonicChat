@@ -6,11 +6,9 @@ import android.os.Environment
 import java.io.File
 import java.io.FileOutputStream
 
-/** سمت ارسال: فایل را به تکه‌ها می‌شکند و برای MainActivity می‌فرستد */
 object FileTx {
     data class Chunk(val flags: Int, val data: ByteArray)
 
-    /** فایل را از Uri می‌خواند و لیست فریم‌های آماده برای FEC+مدولاسیون برمی‌گرداند */
     fun prepare(ctx: Context, uri: Uri, key: String, chunkSize: Int = Proto.CHUNK): List<Chunk> {
         val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return emptyList()
         val name = queryName(ctx, uri) ?: "file.bin"
@@ -18,13 +16,11 @@ object FileTx {
 
         // فریم شروع: name + 0x00 + طول فایل (۸ بایت)
         val startMeta = name.toByteArray(Charsets.UTF_8) + byteArrayOf(0) + longToBytes(bytes.size.toLong())
-        // شروع، با flag continuation اگر طولانی بود
         splitIntoFrames(startMeta, chunkSize).forEachIndexed { i, c ->
             val more = if (i < 0) 1 else 0
             list.add(Chunk(Proto.TYPE_FILE_START or more, c))
         }
 
-        // داده‌ها
         var off = 0
         while (off < bytes.size) {
             val end = minOf(off + chunkSize, bytes.size)
@@ -34,7 +30,6 @@ object FileTx {
             list.add(Chunk(Proto.TYPE_FILE_DATA or more, c))
         }
 
-        // پایان
         list.add(Chunk(Proto.TYPE_FILE_END, ByteArray(0)))
         return list
     }
@@ -67,25 +62,23 @@ object FileTx {
     }
 }
 
-/** سمت دریافت: تکه‌ها را جمع می‌کند و فایل را می‌سازد */
 class FileRx(private val ctx: Context) {
     private var fileName: String? = null
     private var expectedSize = -1L
     private val buf = java.io.ByteArrayOutputStream()
-    private var startMetaReceived = false
     private val metaBuf = java.io.ByteArrayOutputStream()
+    private var savedFile: File? = null
 
     @Volatile var active = false
     @Volatile var progress = 0
 
     fun reset() {
         fileName = null; expectedSize = -1; buf.reset(); metaBuf.reset()
-        startMetaReceived = false; active = false; progress = 0
+        active = false; progress = 0
     }
 
-    /** true اگر فریم مربوط به فایل بود */
     fun onFrame(flags: Int, payload: ByteArray, onProgress: (Int) -> Unit, onDone: (File) -> Unit): Boolean {
-        val type = flags and 0x0E   // bit1..3
+        val type = flags and 0x0E
         val more = flags and 1
         return when (type) {
             Proto.TYPE_FILE_START -> {
@@ -93,7 +86,7 @@ class FileRx(private val ctx: Context) {
                 metaBuf.write(payload)
                 if (more == 0) {
                     val meta = metaBuf.toByteArray()
-                    val sep = meta.indexOf(0)
+                    val sep: Int = meta.indexOf(0)
                     if (sep > 0 && meta.size >= sep + 9) {
                         fileName = String(meta, 0, sep, Charsets.UTF_8)
                         expectedSize = bytesToLong(meta, sep + 1)
@@ -120,8 +113,6 @@ class FileRx(private val ctx: Context) {
             else -> false
         }
     }
-
-    private var savedFile: File? = null
 
     private fun saveFile() {
         val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "SonicChat")
