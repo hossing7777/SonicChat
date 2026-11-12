@@ -7,8 +7,9 @@ object Proto {
     const val SR = 44100
     const val SYNC = 0xD391
     const val MAX_PAYLOAD = 200
-    const val CHUNK = 48          // بایت در هر فریم
-    const val SPACING = 600.0     // فاصله دو فرکانس FSK (Hz)
+    const val CHUNK = 40
+    const val SPACING = 600.0
+    const val FEC_REPEAT = 3   // هر بایت ۳ بار تکرار می‌شود (تصحیح خطا با رأی اکثریت)
 
     fun crc16(data: ByteArray): Int {
         var crc = 0xFFFF
@@ -36,7 +37,6 @@ object Proto {
         return o.toByteArray()
     }
 
-    /** تقسیم متن به تکه‌های UTF-8 بدون شکستن کاراکتر */
     fun split(text: String): List<ByteArray> {
         val res = ArrayList<ByteArray>()
         val sb = ByteArrayOutputStream()
@@ -52,7 +52,32 @@ object Proto {
         return res
     }
 
-    /** FSK دوتایی با فاز پیوسته */
+    /** FEC: هر بایت را ۳ بار پشت‌سرهم می‌نویسد */
+    fun fecEncode(data: ByteArray): ByteArray {
+        val o = ByteArray(data.size * FEC_REPEAT)
+        for (i in data.indices) {
+            repeat(FEC_REPEAT) { k -> o[i * FEC_REPEAT + k] = data[i] }
+        }
+        return o
+    }
+
+    /** FEC decode: رأی اکثریت روی هر ۳ بایت */
+    fun fecDecode(data: ByteArray): ByteArray {
+        if (data.size % FEC_REPEAT != 0) return data
+        val out = ByteArray(data.size / FEC_REPEAT)
+        for (i in out.indices) {
+            val a = data[i * 3].toInt() and 0xFF
+            val b = data[i * 3 + 1].toInt() and 0xFF
+            val c = data[i * 3 + 2].toInt() and 0xFF
+            out[i] = when {
+                a == b || a == c -> a.toByte()
+                b == c -> b.toByte()
+                else -> a.toByte()
+            }
+        }
+        return out
+    }
+
     fun modulate(frame: ByteArray, f0: Double, f1: Double, n: Int): ShortArray {
         val total = frame.size * 8 * n
         val out = ShortArray(total)
@@ -87,12 +112,13 @@ class Demodulator(
     private val ring = FloatArray(size)
     private var total = 0L
     @Volatile var level = 0.0
+    @Volatile var snr = 0.0
 
     private inner class Dec(off: Int) {
         var next = off.toLong()
         var state = 0
         var shift = 0
-        val buf = ByteArray(Proto.MAX_PAYLOAD + 8)
+        val buf = ByteArray(Proto.MAX_PAYLOAD * Proto.FEC_REPEAT + 16)
         var cnt = 0; var cur = 0; var bc = 0; var need = 0
 
         fun reset() { state = 0; shift = 0 }
@@ -109,14 +135,15 @@ class Demodulator(
             if (cnt == 2) {
                 val len = buf[1].toInt() and 0xFF
                 if (len > Proto.MAX_PAYLOAD) { reset(); return }
-                need = 2 + len + 2
+                need = 2 + len * Proto.FEC_REPEAT + 2
             }
-            if (need > 0 && cnt == need) {
+            if (need > 0 && cnt >= need) {
                 val body = buf.copyOfRange(0, need - 2)
                 val crc = ((buf[need - 2].toInt() and 0xFF) shl 8) or (buf[need - 1].toInt() and 0xFF)
                 if (Proto.crc16(body) == crc) {
                     val fl = body[0].toInt() and 0xFF
-                    val pl = body.copyOfRange(2, body.size)
+                    val encPayload = body.copyOfRange(2, body.size)
+                    val pl = Proto.fecDecode(encPayload)
                     resetAll()
                     onFrame(fl, pl)
                 } else reset()
@@ -124,7 +151,7 @@ class Demodulator(
         }
     }
 
-    private val dec = Array(4) { Dec(it * n / 4) }
+    private val dec = Array(6) { Dec(it * n / 6) }
     private fun resetAll() { for (d in dec) d.reset() }
 
     private fun power(start: Long, f: Double): Double {
@@ -152,6 +179,7 @@ class Demodulator(
             val st = total - n
             val a = max(power(st, f0), power(st, f1))
             level = 2.0 * sqrt(max(a, 0.0)) / n
+            snr = 10.0 * log10(max(level, 1e-9))
         }
     }
 }
