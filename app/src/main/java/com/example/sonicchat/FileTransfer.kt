@@ -99,7 +99,7 @@ class FileRx(private val ctx: Context) {
                 if (!active) return true
                 buf.write(payload)
                 val total = expectedSize.coerceAtLeast(1)
-                progress = (buf.size() * 100 / total).coerceIn(0, 100)
+                progress = ((buf.size().toLong() * 100 / total).coerceIn(0L, 100L)).toInt()
                 onProgress(progress)
                 true
             }
