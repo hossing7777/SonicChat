@@ -70,7 +70,7 @@ class MainActivity : Activity() {
         }
         fun lp(w: Int = -1, h: Int = -2, wt: Float = 0f) = LinearLayout.LayoutParams(w, h, wt)
 
-        root.addView(TextView(this).apply { text = "SonicChat — نسخه ۵ (متن + فایل)"; textSize = 18f })
+        root.addView(TextView(this).apply { text = "SonicChat — نسخه ۶ (ارسال یکجا)"; textSize = 18f })
         tvStatus = TextView(this).apply { text = "آماده" }
         root.addView(tvStatus)
         pbLevel = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
@@ -210,6 +210,10 @@ class MainActivity : Activity() {
         transmitFrames(frames, "فایل")
     }
 
+    /**
+     * همه فریم‌ها را یکجا به یک ShortArray تبدیل می‌کند و با یک AudioTrack پخش می‌کند.
+     * بین فریم‌ها سکوت ۱۵۰ms می‌گذارد (مثل نسخه ۱) تا دمدولاتور سینک شود.
+     */
     private fun transmitFrames(frames: List<Pair<Int, ByteArray>>, label: String) {
         val a0 = f0; val a1 = f0 + Proto.SPACING; val n = symN
         if (cbMax.isChecked) {
@@ -220,13 +224,31 @@ class MainActivity : Activity() {
         tvStatus.text = "در حال ارسال $label..."
         thread(isDaemon = true) {
             try {
+                val parts = ArrayList<ShortArray>()
+                parts.add(ShortArray(SR / 10))   // ۱۰۰ms سکوت اول
                 val total = frames.size
                 frames.forEachIndexed { idx, (flags, payload) ->
-                    val audio = Proto.modulate(Proto.frame(flags, payload), a0, a1, n)
-                    playAudio(audio)
+                    parts.add(Proto.modulate(Proto.frame(flags, payload), a0, a1, n))
+                    parts.add(ShortArray(SR * 15 / 100))  // ۱۵۰ms سکوت بین فریم‌ها
                     ui.post { tvProgress.text = "ارسال $label: ${(idx + 1) * 100 / total}%" }
-                    Thread.sleep(120)
                 }
+                val all = ShortArray(parts.sumOf { it.size })
+                var p = 0
+                for (s in parts) { System.arraycopy(s, 0, all, p, s.size); p += s.size }
+
+                val track = AudioTrack.Builder()
+                    .setAudioAttributes(AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                    .setAudioFormat(AudioFormat.Builder().setSampleRate(SR)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                    .setBufferSizeInBytes(all.size * 2)
+                    .setTransferMode(AudioTrack.MODE_STATIC).build()
+                track.write(all, 0, all.size)
+                track.play()
+                Thread.sleep(all.size * 1000L / SR + 300)
+                track.stop(); track.release()
             } catch (e: Exception) {
                 ui.post { Toast.makeText(this, "خطا: ${e.message}", Toast.LENGTH_LONG).show() }
             } finally {
@@ -239,27 +261,6 @@ class MainActivity : Activity() {
                 }
             }
         }
-    }
-
-    private fun playAudio(pcm: ShortArray) {
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(SR)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-            .setBufferSizeInBytes(max(SR, pcm.size * 2))
-            .setTransferMode(AudioTrack.MODE_STREAM).build()
-        track.play()
-        var w = 0
-        while (w < pcm.size) {
-            val k = track.write(pcm, w, pcm.size - w)
-            if (k <= 0) break
-            w += k
-        }
-        Thread.sleep(200)
-        track.stop(); track.release()
     }
 
     // ---------------- دریافت ----------------
