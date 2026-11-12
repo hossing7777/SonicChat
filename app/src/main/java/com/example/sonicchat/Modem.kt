@@ -9,7 +9,13 @@ object Proto {
     const val MAX_PAYLOAD = 200
     const val CHUNK = 40
     const val SPACING = 600.0
-    const val FEC_REPEAT = 3   // هر بایت ۳ بار تکرار می‌شود (تصحیح خطا با رأی اکثریت)
+    const val FEC_REPEAT = 2
+
+    // انواع فریم
+    const val TYPE_TEXT = 0
+    const val TYPE_FILE_START = 1
+    const val TYPE_FILE_DATA = 2
+    const val TYPE_FILE_END = 3
 
     fun crc16(data: ByteArray): Int {
         var crc = 0xFFFF
@@ -23,7 +29,8 @@ object Proto {
         return crc
     }
 
-    /** فریم: AA AA AA AA | D3 91 | flags | len | payload | crc16 */
+    /** فریم: AA AA AA AA | D3 91 | flags | len | payload | crc16
+     *  flags: bit0 = more (ادامه دارد), bit1..3 = type */
     fun frame(flags: Int, payload: ByteArray): ByteArray {
         val body = ByteArray(2 + payload.size)
         body[0] = flags.toByte(); body[1] = payload.size.toByte()
@@ -52,7 +59,6 @@ object Proto {
         return res
     }
 
-    /** FEC: هر بایت را ۳ بار پشت‌سرهم می‌نویسد */
     fun fecEncode(data: ByteArray): ByteArray {
         val o = ByteArray(data.size * FEC_REPEAT)
         for (i in data.indices) {
@@ -61,18 +67,21 @@ object Proto {
         return o
     }
 
-    /** FEC decode: رأی اکثریت روی هر ۳ بایت */
     fun fecDecode(data: ByteArray): ByteArray {
         if (data.size % FEC_REPEAT != 0) return data
         val out = ByteArray(data.size / FEC_REPEAT)
         for (i in out.indices) {
-            val a = data[i * 3].toInt() and 0xFF
-            val b = data[i * 3 + 1].toInt() and 0xFF
-            val c = data[i * 3 + 2].toInt() and 0xFF
-            out[i] = when {
-                a == b || a == c -> a.toByte()
-                b == c -> b.toByte()
-                else -> a.toByte()
+            if (FEC_REPEAT == 2) {
+                out[i] = data[i * 2]
+            } else {
+                val a = data[i * 3].toInt() and 0xFF
+                val b = data[i * 3 + 1].toInt() and 0xFF
+                val c = data[i * 3 + 2].toInt() and 0xFF
+                out[i] = when {
+                    a == b || a == c -> a.toByte()
+                    b == c -> b.toByte()
+                    else -> a.toByte()
+                }
             }
         }
         return out
